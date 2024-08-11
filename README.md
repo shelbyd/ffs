@@ -15,3 +15,11 @@ cd <my-project>
 * Users don't need to install extra tools. Just clone and run.
 * Integration with new languages, frameworks, or custom scripts is simple and works with existing plugins or other custom scripts.
 * Builds produce byte-for-byte identical output if the underlying tools do.
+
+## Model
+
+ffs commands:
+
+* build - Construct all artifacts.
+* test - Run tests.
+* deploy - Run all "deploy" actions.
