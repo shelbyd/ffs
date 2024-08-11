@@ -27,7 +27,10 @@ pub struct Selector {
 }
 
 impl Selector {
-    pub fn matches(&self, task_id: &str, tags: &HashSet<&str>) -> bool {
+    pub fn matches<T>(&self, task_id: &str, tags: &HashSet<T>) -> bool
+    where
+        T: std::borrow::Borrow<str> + Eq + std::hash::Hash,
+    {
         for req in &self.required_tags {
             if !tags.contains(req.as_str()) {
                 return false;

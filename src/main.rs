@@ -1,7 +1,8 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap, HashSet},
     io::Write,
     path::{Path, PathBuf},
+    process::Output,
     sync::Arc,
 };
 
@@ -30,15 +31,15 @@ fn main() -> eyre::Result<()> {
     let options = Options::parse();
 
     match &options.command {
-        Command::Run { selector: _ } => {
-            run()?;
+        Command::Run { selector } => {
+            run(&selector)?;
         }
     }
 
     Ok(())
 }
 
-fn run() -> eyre::Result<()> {
+fn run(selector: &Selector) -> eyre::Result<()> {
     // TODO(shelbyd): Search for root.
     let reader = Arc::new(Reader::new());
 
@@ -56,83 +57,62 @@ fn run() -> eyre::Result<()> {
         }
 
         let file = reader.read(entry.path())?;
-        for (name, test) in file.tests() {
-            // TODO(shelbyd): Actual target name.
-            let message = format!("Executing {}/{name}", entry.path().display());
-            test.execute(entry.path().parent().expect("entry is file"), &mut builder)
+        for (name, task) in file.tasks() {
+            let task_path = task_path(entry.path(), name);
+
+            if !selector.matches(&task_path, &task.tags) {
+                continue;
+            }
+
+            let message = format!("Executing {task_path}");
+            let output = builder
+                .execute(task, entry.path().parent().expect("entry is file"))
                 .context(message)?;
+
+            if !output.status.success() {
+                std::io::stdout().lock().write_all(&output.stdout)?;
+                std::io::stderr().lock().write_all(&output.stderr)?;
+                eyre::bail!("Task failed: {task_path}");
+            }
+
+            eprintln!("Task finished: {task_path}");
+
             count += 1;
         }
     }
 
-    eprintln!("{count} tests passed");
+    eprintln!("Successfully ran {count} tasks");
 
     Ok(())
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct FfsFile {
-    #[serde(default)]
-    tests: BTreeMap<String, Test>,
-
-    #[serde(default)]
-    #[allow(unused)]
-    tools: BTreeMap<String, Tool>,
-}
+struct FfsFile(BTreeMap<String, Task>);
 
 impl FfsFile {
-    fn tests(&self) -> impl Iterator<Item = (&String, &Test)> {
-        self.tests.iter()
+    fn tasks(&self) -> impl Iterator<Item = (&String, &Task)> {
+        self.0.iter()
     }
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Test {
+struct Task {
     cmd: String,
-}
 
-impl Test {
-    fn execute(&self, pwd: &Path, builder: &mut Builder) -> eyre::Result<()> {
-        let command = builder.parse_command(&self.cmd)?;
+    #[serde(default)]
+    tags: HashSet<String>,
 
-        let output = std::process::Command::new("sh")
-            .current_dir(pwd)
-            .env_clear()
-            .arg("-c")
-            .arg(command)
-            .output()?;
-
-        if output.status.success() {
-            return Ok(());
-        }
-
-        std::io::stderr().lock().write_all(&output.stderr)?;
-        std::io::stdout().lock().write_all(&output.stdout)?;
-
-        eyre::bail!("Test command failed");
-    }
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Tool {
-    source: ToolSource,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum ToolSource {
-    System(PathBuf),
-    Target { cmd: String, bin: PathBuf },
+    #[serde(default)]
+    outs: HashMap<String, PathBuf>,
 }
 
 struct Builder {
     reader: Arc<Reader>,
 
     root: PathBuf,
-    targets: DashMap<String, PathBuf>,
+    target_outs: DashMap<String, PathBuf>,
 }
 
 impl Builder {
@@ -141,16 +121,16 @@ impl Builder {
             reader,
 
             root: root.as_ref().to_path_buf(),
-            targets: Default::default(),
+            target_outs: Default::default(),
         }
     }
 
     fn parse_command(&mut self, c: &str) -> eyre::Result<String> {
         loop {
-            match command::parse_command(c, &self.targets) {
+            match command::parse_command(c, &self.target_outs) {
                 Ok(c) => return Ok(c),
                 Err(ParseError::UnknownTarget(t)) => {
-                    self.build(&t).context(format!("Building {t:?}"))?
+                    self.build(&t).context(format!("Building {t:?}"))?;
                 }
             }
         }
@@ -162,45 +142,54 @@ impl Builder {
 
         let name = target::name(target)?;
 
-        let tool = file
-            .tools
+        let task = file
+            .0
             .get(name)
-            .ok_or_eyre(format!("Unknown tool: {target:?}"))?;
+            .ok_or_eyre(format!("Unknown task: {target:?}"))?;
 
-        match &tool.source {
-            ToolSource::System(name) => {
-                // TODO(shelbyd): Allow actual paths.
-                let path = String::from_utf8(
-                    std::process::Command::new("which")
-                        .arg(name)
-                        .output()?
-                        .stdout,
-                )?;
-                self.targets.insert(target.to_string(), path.trim().into());
-            }
+        let dir = definition.parent().unwrap();
+        let relative_dir = dir.strip_prefix(&self.root).unwrap();
 
-            ToolSource::Target { cmd, bin } => {
-                let dir = definition.parent().unwrap();
-                let command = self.parse_command(cmd)?;
-                let output = std::process::Command::new("sh")
-                    .current_dir(dir)
-                    .env_clear()
-                    .arg("-c")
-                    .arg(command)
-                    .output()?;
+        let task_path = task_path(&relative_dir, name);
 
-                eyre::ensure!(
-                    output.status.success(),
-                    "{}",
-                    String::from_utf8_lossy(&output.stderr)
-                );
+        let output = self.execute(task, &dir)?;
 
-                self.targets.insert(target.to_string(), dir.join(bin));
-            }
+        if !output.status.success() {
+            eyre::bail!("Build failed: {task_path}")
+        }
+
+        if let Some(path) = task.outs.get("default") {
+            let file = dir.join(path);
+            eyre::ensure!(file.exists());
+
+            self.target_outs.insert(task_path, file);
         }
 
         Ok(())
     }
+
+    fn execute(&mut self, task: &Task, dir: &Path) -> eyre::Result<Output> {
+        let command = self.parse_command(&task.cmd)?;
+        Ok(std::process::Command::new("sh")
+            .current_dir(dir)
+            .arg("-c")
+            .arg(command)
+            .output()?)
+    }
+}
+
+fn task_path(file_or_dir: &Path, name: &str) -> String {
+    assert!(file_or_dir.is_relative());
+
+    let without_ffs = if file_or_dir.file_name().is_some_and(|f| f == "FFS") {
+        file_or_dir.parent().unwrap()
+    } else {
+        file_or_dir
+    };
+
+    let path = without_ffs.strip_prefix("./").unwrap_or(without_ffs);
+
+    format!("//{}/{name}", path.display())
 }
 
 struct Reader {
