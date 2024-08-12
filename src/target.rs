@@ -1,4 +1,4 @@
-use std::{collections::HashSet, str::FromStr};
+use std::{collections::HashSet, path::Path, str::FromStr};
 
 pub fn path_to_definition(target: &str) -> eyre::Result<String> {
     let target = target
@@ -83,6 +83,28 @@ impl FromStr for Selector {
         result.target = s.to_string();
         Ok(result)
     }
+}
+
+pub fn task_path(file_or_dir: impl AsRef<Path>, name: &str) -> String {
+    let file_or_dir = file_or_dir.as_ref();
+    assert!(file_or_dir.is_relative());
+
+    let without_ffs = if file_or_dir.file_name().is_some_and(|f| f == "FFS") {
+        file_or_dir.parent().unwrap()
+    } else {
+        file_or_dir
+    };
+
+    let path = without_ffs.strip_prefix("./").unwrap_or(without_ffs);
+
+    let mut result = format!("//{}", path.display()).replace("///", "//");
+
+    if !result.ends_with("/") {
+        result += "/";
+    }
+    result += name;
+
+    result
 }
 
 #[cfg(test)]
@@ -180,5 +202,14 @@ mod tests {
     #[test]
     fn bad_target_specifier() {
         assert!("bad/target".parse::<Selector>().is_err())
+    }
+
+    #[test]
+    fn task_path_() {
+        assert_eq!(task_path("./FFS", "task"), "//task");
+        assert_eq!(task_path("path/to", "task"), "//path/to/task");
+        assert_eq!(task_path("path/to/", "task"), "//path/to/task");
+        assert_eq!(task_path("path/to/FFS", "task"), "//path/to/task");
+        assert_eq!(task_path("./path/to/FFS", "task"), "//path/to/task");
     }
 }

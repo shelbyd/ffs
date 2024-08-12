@@ -11,7 +11,7 @@ use command::ParseError;
 use dashmap::DashMap;
 use eyre::{Context, OptionExt};
 use serde::Deserialize;
-use target::Selector;
+use target::{task_path, Selector};
 
 mod command;
 mod target;
@@ -102,6 +102,9 @@ struct Task {
     cmd: String,
 
     #[serde(default)]
+    prereqs: Vec<String>,
+
+    #[serde(default)]
     tags: HashSet<String>,
 
     #[serde(default)]
@@ -130,7 +133,9 @@ impl Builder {
             match command::parse_command(c, &self.target_outs) {
                 Ok(c) => return Ok(c),
                 Err(ParseError::UnknownTarget(t)) => {
-                    self.build(&t).context(format!("Building {t:?}"))?;
+                    let task_path = t.split_once(":").map(|(t, _file)| t).unwrap_or(&t);
+                    self.build(task_path)
+                        .context(format!("Building {task_path:?}"))?;
                 }
             }
         }
@@ -158,17 +163,29 @@ impl Builder {
             eyre::bail!("Build failed: {task_path}")
         }
 
-        if let Some(path) = task.outs.get("default") {
+        for (name, path) in &task.outs {
             let file = dir.join(path);
-            eyre::ensure!(file.exists());
+            eyre::ensure!(
+                file.exists(),
+                "Missing output file: {name} @ {}",
+                file.display()
+            );
 
-            self.target_outs.insert(task_path, file);
+            if name == "default" {
+                self.target_outs.insert(task_path.to_string(), file);
+            } else {
+                self.target_outs.insert(format!("{task_path}:{name}"), file);
+            }
         }
 
         Ok(())
     }
 
     fn execute(&mut self, task: &Task, dir: &Path) -> eyre::Result<Output> {
+        for prereq in &task.prereqs {
+            self.build(&prereq)?;
+        }
+
         let command = self.parse_command(&task.cmd)?;
         Ok(std::process::Command::new("sh")
             .current_dir(dir)
@@ -176,20 +193,6 @@ impl Builder {
             .arg(command)
             .output()?)
     }
-}
-
-fn task_path(file_or_dir: &Path, name: &str) -> String {
-    assert!(file_or_dir.is_relative());
-
-    let without_ffs = if file_or_dir.file_name().is_some_and(|f| f == "FFS") {
-        file_or_dir.parent().unwrap()
-    } else {
-        file_or_dir
-    };
-
-    let path = without_ffs.strip_prefix("./").unwrap_or(without_ffs);
-
-    format!("//{}/{name}", path.display())
 }
 
 struct Reader {
