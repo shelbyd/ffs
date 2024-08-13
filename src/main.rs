@@ -5,12 +5,14 @@ use std::{
     path::{Path, PathBuf},
     process::Output,
     sync::Arc,
+    time::Instant,
 };
 
 use clap::{Parser, Subcommand};
 use command::ParseError;
 use dashmap::DashMap;
 use eyre::{Context, OptionExt};
+use reporting::{build_reporter, Reporter};
 use starlark::{
     environment::{GlobalsBuilder, Module},
     eval::Evaluator,
@@ -20,10 +22,14 @@ use starlark::{
 use target::{task_path, Selector};
 
 mod command;
+mod reporting;
 mod target;
 
 #[derive(Parser, Debug)]
 struct Options {
+    #[command(flatten)]
+    reporting: reporting::Options,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -36,23 +42,23 @@ enum Command {
 fn main() -> eyre::Result<()> {
     let options = Options::parse();
 
+    let reporter = build_reporter(&options.reporting);
+
     match &options.command {
         Command::Run { selector } => {
-            run(&selector)?;
+            run(&selector, reporter)?;
         }
     }
 
     Ok(())
 }
 
-fn run(selector: &Selector) -> eyre::Result<()> {
+fn run(selector: &Selector, reporter: Arc<dyn Reporter>) -> eyre::Result<()> {
     // TODO(shelbyd): Search for root.
     let reader = Arc::new(Reader::new());
 
     let root = std::env::current_dir()?;
-    let mut builder = Builder::new(Arc::clone(&reader), &root);
-
-    let mut count = 0;
+    let mut builder = Builder::new(Arc::clone(&reader), Arc::clone(&reporter), &root);
 
     for entry in ignore::Walk::new(".") {
         let entry = entry?;
@@ -75,7 +81,11 @@ fn run(selector: &Selector) -> eyre::Result<()> {
 
             let message = format!("Executing {task_path}");
             let output = builder
-                .execute(task, entry.path().parent().expect("entry is file"))
+                .execute(
+                    &task_path,
+                    task,
+                    entry.path().parent().expect("entry is file"),
+                )
                 .context(message)?;
 
             if !output.status.success() {
@@ -83,14 +93,10 @@ fn run(selector: &Selector) -> eyre::Result<()> {
                 std::io::stderr().lock().write_all(&output.stderr)?;
                 eyre::bail!("Task failed: {task_path}");
             }
-
-            eprintln!("Task finished: {task_path}");
-
-            count += 1;
         }
     }
 
-    eprintln!("Successfully ran {count} tasks");
+    reporter.finish_top_level();
 
     Ok(())
 }
@@ -107,25 +113,24 @@ impl TaskSet {
 #[derive(Debug)]
 struct Task {
     cmd: String,
-
     prereqs: Vec<String>,
-
     tags: HashSet<String>,
-
     outs: HashMap<String, PathBuf>,
 }
 
 struct Builder {
     reader: Arc<Reader>,
+    reporter: Arc<dyn Reporter>,
 
     root: PathBuf,
     target_outs: DashMap<String, PathBuf>,
 }
 
 impl Builder {
-    fn new(reader: Arc<Reader>, root: impl AsRef<Path>) -> Self {
+    fn new(reader: Arc<Reader>, reporter: Arc<dyn Reporter>, root: impl AsRef<Path>) -> Self {
         Self {
             reader,
+            reporter,
 
             root: root.as_ref().to_path_buf(),
             target_outs: Default::default(),
@@ -161,7 +166,7 @@ impl Builder {
 
         let task_path = task_path(&relative_dir, name);
 
-        let output = self.execute(task, &dir)?;
+        let output = self.execute(&task_path, task, &dir)?;
 
         if !output.status.success() {
             eyre::bail!("Build failed: {task_path}")
@@ -185,17 +190,23 @@ impl Builder {
         Ok(())
     }
 
-    fn execute(&mut self, task: &Task, dir: &Path) -> eyre::Result<Output> {
+    fn execute(&mut self, task_path: &str, task: &Task, dir: &Path) -> eyre::Result<Output> {
         for prereq in &task.prereqs {
             self.build(&prereq)?;
         }
-
         let command = self.parse_command(&task.cmd)?;
-        Ok(std::process::Command::new("sh")
+
+        self.reporter.begin_execute(task_path);
+        let start = Instant::now();
+        let output = std::process::Command::new("sh")
             .current_dir(dir)
+            .arg("-e")
             .arg("-c")
             .arg(command)
-            .output()?)
+            .output()?;
+        self.reporter.finish_execute(task_path, start.elapsed());
+
+        Ok(output)
     }
 }
 
