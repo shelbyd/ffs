@@ -51,6 +51,17 @@ impl Selector {
 
         false
     }
+
+    pub(crate) fn matches_file(&self, path: impl AsRef<Path>) -> bool {
+        let path = std_to_ffs(path);
+
+        if self.allow_children {
+            return path.starts_with(&self.target);
+        }
+
+        let (target_parent, _) = self.target.rsplit_once("/").unwrap();
+        path == target_parent || (path == "//" && target_parent == "/")
+    }
 }
 
 impl FromStr for Selector {
@@ -86,6 +97,17 @@ impl FromStr for Selector {
 }
 
 pub fn task_path(file_or_dir: impl AsRef<Path>, name: &str) -> String {
+    let mut result = std_to_ffs(file_or_dir);
+
+    if !result.ends_with("/") {
+        result += "/";
+    }
+    result += name;
+
+    result
+}
+
+fn std_to_ffs(file_or_dir: impl AsRef<Path>) -> String {
     let file_or_dir = file_or_dir.as_ref();
     assert!(file_or_dir.is_relative());
 
@@ -97,14 +119,7 @@ pub fn task_path(file_or_dir: impl AsRef<Path>, name: &str) -> String {
 
     let path = without_ffs.strip_prefix("./").unwrap_or(without_ffs);
 
-    let mut result = format!("//{}", path.display()).replace("///", "//");
-
-    if !result.ends_with("/") {
-        result += "/";
-    }
-    result += name;
-
-    result
+    format!("//{}", path.display()).replace("///", "//")
 }
 
 #[cfg(test)]
@@ -140,12 +155,12 @@ mod tests {
 
     #[test]
     fn selector_exact_does_not_match_other() {
-        assert!(!selector_matches("//a/target", "//another/target", []))
+        assert!(!selector_matches("//a/target", "//another/target", []));
     }
 
     #[test]
     fn selector_matches_exact() {
-        assert!(selector_matches("//a/target", "//a/target", []))
+        assert!(selector_matches("//a/target", "//a/target", []));
     }
 
     #[test]
@@ -154,7 +169,7 @@ mod tests {
             "//some/path/...",
             "//some/path/actual_target",
             []
-        ))
+        ));
     }
 
     #[test]
@@ -163,17 +178,17 @@ mod tests {
             "//some/path/...",
             "//some/path_suffix/actual_target",
             []
-        ))
+        ));
     }
 
     #[test]
     fn matches_with_tags() {
-        assert!(selector_matches("@test", "//some/target", ["test"]))
+        assert!(selector_matches("@test", "//some/target", ["test"]));
     }
 
     #[test]
     fn does_not_match_without_tags() {
-        assert!(!selector_matches("@test", "//some/target", ["deploy"]))
+        assert!(!selector_matches("@test", "//some/target", ["deploy"]));
     }
 
     #[test]
@@ -182,7 +197,7 @@ mod tests {
             "@test,deploy",
             "//some/target",
             ["deploy", "test"]
-        ))
+        ));
     }
 
     #[test]
@@ -191,17 +206,56 @@ mod tests {
             "@test,deploy",
             "//some/target",
             ["deploy"]
-        ))
+        ));
     }
 
     #[test]
     fn exact_does_not_match_child() {
-        assert!(!selector_matches("//a/target", "//a/target/child", []))
+        assert!(!selector_matches("//a/target", "//a/target/child", []));
     }
 
     #[test]
     fn bad_target_specifier() {
-        assert!("bad/target".parse::<Selector>().is_err())
+        assert!("bad/target".parse::<Selector>().is_err());
+    }
+
+    fn selector_matches_file<'a>(sel: &str, file: &str) -> bool {
+        let sel = sel.parse::<Selector>().unwrap();
+        sel.matches_file(file)
+    }
+
+    #[test]
+    fn exact_matches_file() {
+        assert!(selector_matches_file("//path/to/target", "./path/to/FFS"));
+    }
+
+    #[test]
+    fn exact_but_different_file() {
+        assert!(!selector_matches_file(
+            "//path/to/target",
+            "./path/elsewhere/FFS"
+        ));
+    }
+
+    #[test]
+    fn child_file_match() {
+        assert!(selector_matches_file(
+            "//path/to/...",
+            "./path/to/some/child/FFS"
+        ));
+    }
+
+    #[test]
+    fn poorly_named_sibling() {
+        assert!(!selector_matches_file(
+            "//path/to_elsewhere/target",
+            "./path/to/FFS"
+        ));
+    }
+
+    #[test]
+    fn root_file() {
+        assert!(selector_matches_file("//root_target", "./FFS"));
     }
 
     #[test]

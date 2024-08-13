@@ -1,4 +1,5 @@
 use std::{
+    cell::RefCell,
     collections::{BTreeMap, HashMap, HashSet},
     io::Write,
     path::{Path, PathBuf},
@@ -10,7 +11,12 @@ use clap::{Parser, Subcommand};
 use command::ParseError;
 use dashmap::DashMap;
 use eyre::{Context, OptionExt};
-use serde::Deserialize;
+use starlark::{
+    environment::{GlobalsBuilder, Module},
+    eval::Evaluator,
+    syntax::{AstModule, Dialect},
+    values::{list::UnpackList, none::NoneType},
+};
 use target::{task_path, Selector};
 
 mod command;
@@ -55,6 +61,9 @@ fn run(selector: &Selector) -> eyre::Result<()> {
         if !is_ffs_file {
             continue;
         }
+        if !selector.matches_file(&entry.path()) {
+            continue;
+        }
 
         let file = reader.read(entry.path())?;
         for (name, task) in file.tasks() {
@@ -86,28 +95,23 @@ fn run(selector: &Selector) -> eyre::Result<()> {
     Ok(())
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct FfsFile(BTreeMap<String, Task>);
+#[derive(Debug, Default, starlark::any::ProvidesStaticType)]
+struct TaskSet(BTreeMap<String, Task>);
 
-impl FfsFile {
+impl TaskSet {
     fn tasks(&self) -> impl Iterator<Item = (&String, &Task)> {
         self.0.iter()
     }
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug)]
 struct Task {
     cmd: String,
 
-    #[serde(default)]
     prereqs: Vec<String>,
 
-    #[serde(default)]
     tags: HashSet<String>,
 
-    #[serde(default)]
     outs: HashMap<String, PathBuf>,
 }
 
@@ -196,7 +200,7 @@ impl Builder {
 }
 
 struct Reader {
-    cache: DashMap<PathBuf, Arc<FfsFile>>,
+    cache: DashMap<PathBuf, Arc<TaskSet>>,
 }
 
 impl Reader {
@@ -206,14 +210,74 @@ impl Reader {
         }
     }
 
-    fn read(&self, path: impl AsRef<Path>) -> eyre::Result<Arc<FfsFile>> {
-        match self.cache.entry(path.as_ref().to_path_buf()) {
-            dashmap::Entry::Occupied(o) => Ok(Arc::clone(o.get())),
-            dashmap::Entry::Vacant(v) => {
-                let file: FfsFile = toml::from_str(&std::fs::read_to_string(path)?)?;
-                let f = v.insert(Arc::new(file));
-                Ok(Arc::clone(&f))
-            }
+    fn read(&self, path: impl AsRef<Path>) -> eyre::Result<Arc<TaskSet>> {
+        let v = match self.cache.entry(path.as_ref().to_path_buf()) {
+            dashmap::Entry::Occupied(o) => return Ok(Arc::clone(o.get())),
+            dashmap::Entry::Vacant(v) => v,
+        };
+
+        let tasks: TaskSet = self.load(path.as_ref())?;
+        let f = v.insert(Arc::new(tasks));
+        Ok(Arc::clone(&f))
+    }
+
+    fn load(&self, path: impl AsRef<Path>) -> eyre::Result<TaskSet> {
+        let path = path.as_ref();
+        let contents = std::fs::read_to_string(path)?;
+
+        let ast = AstModule::parse(&path.display().to_string(), contents, &Dialect::Standard)
+            .map_err(|e| eyre::eyre!(e.into_anyhow()))?;
+
+        let globals = GlobalsBuilder::standard().with(task_definer).build();
+        let module = Module::new();
+
+        let result = RefCell::new(TaskSet::default());
+        {
+            let mut eval = Evaluator::new(&module);
+            eval.extra = Some(&result);
+
+            eval.eval_module(ast, &globals)
+                .map_err(|e| eyre::eyre!(e.into_anyhow()))?;
         }
+
+        Ok(result.into_inner())
+    }
+}
+
+#[starlark::starlark_module]
+fn task_definer(builder: &mut GlobalsBuilder) {
+    // TODO(shelbyd): Return path to task.
+    fn task(
+        name: String,
+        cmd: String,
+
+        #[starlark(require = named)] prereqs: Option<UnpackList<String>>,
+        #[starlark(require = named)] tags: Option<UnpackList<String>>,
+        #[starlark(require = named)] outs: Option<BTreeMap<String, String>>,
+
+        eval: &mut Evaluator,
+    ) -> starlark::Result<NoneType> {
+        let mut set = eval
+            .extra
+            .unwrap()
+            .downcast_ref::<RefCell<TaskSet>>()
+            .unwrap()
+            .borrow_mut();
+
+        set.0.insert(
+            name.to_string(),
+            Task {
+                cmd,
+                prereqs: prereqs.into_iter().flatten().collect(),
+                tags: tags.into_iter().flatten().collect(),
+                outs: outs
+                    .into_iter()
+                    .flatten()
+                    .map(|(k, v)| (k, PathBuf::from(v)))
+                    .collect(),
+            },
+        );
+
+        Ok(NoneType)
     }
 }
