@@ -11,7 +11,7 @@ use std::{
 use clap::{Parser, Subcommand};
 use command::ParseError;
 use dashmap::DashMap;
-use eyre::{Context, OptionExt};
+use eyre::OptionExt;
 use reporting::{build_reporter, Reporter};
 use starlark::{
     environment::{GlobalsBuilder, Module},
@@ -79,14 +79,11 @@ fn run(selector: &Selector, reporter: Arc<dyn Reporter>) -> eyre::Result<()> {
                 continue;
             }
 
-            let message = format!("Executing {task_path}");
-            let output = builder
-                .execute(
-                    &task_path,
-                    task,
-                    entry.path().parent().expect("entry is file"),
-                )
-                .context(message)?;
+            let output = builder.execute(
+                &task_path,
+                task,
+                entry.path().parent().expect("entry is file"),
+            )?;
 
             if !output.status.success() {
                 std::io::stdout().lock().write_all(&output.stdout)?;
@@ -137,19 +134,21 @@ impl Builder {
         }
     }
 
-    fn parse_command(&mut self, c: &str) -> eyre::Result<String> {
+    #[context_attr::eyre(format!("Parsing command for {task_path}"))]
+    fn parse_command(&mut self, task_path: &str, c: &str) -> eyre::Result<String> {
         loop {
+            // TODO(shelbyd): One pass parse.
             match command::parse_command(c, &self.target_outs) {
-                Ok(c) => return Ok(c),
+                Ok(c) => return eyre::Ok(c),
                 Err(ParseError::UnknownTarget(t)) => {
                     let task_path = t.split_once(":").map(|(t, _file)| t).unwrap_or(&t);
-                    self.build(task_path)
-                        .context(format!("Building {task_path:?}"))?;
+                    self.build(task_path)?;
                 }
             }
         }
     }
 
+    #[context_attr::eyre(format!("Building {target}"))]
     fn build(&mut self, target: &str) -> eyre::Result<()> {
         let definition = self.root.join(target::path_to_definition(target)?);
         let file = self.reader.read(&definition)?;
@@ -169,7 +168,7 @@ impl Builder {
         let output = self.execute(&task_path, task, &dir)?;
 
         if !output.status.success() {
-            eyre::bail!("Build failed: {task_path}")
+            eyre::bail!("Command exited with code: {:?}", output.status.code())
         }
 
         for (name, path) in &task.outs {
@@ -194,7 +193,7 @@ impl Builder {
         for prereq in &task.prereqs {
             self.build(&prereq)?;
         }
-        let command = self.parse_command(&task.cmd)?;
+        let command = self.parse_command(task_path, &task.cmd)?;
 
         self.reporter.begin_execute(task_path);
         let start = Instant::now();
