@@ -1,6 +1,6 @@
 use std::{
     cell::RefCell,
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::BTreeMap,
     io::Write,
     path::{Path, PathBuf},
     process::Output,
@@ -19,7 +19,7 @@ use starlark::{
     syntax::{AstModule, Dialect},
     values::{list::UnpackList, none::NoneType},
 };
-use target::{task_path, Selector};
+use target::{task_path, Build, Common, Selector, Target, TargetSet, Task};
 
 mod command;
 mod reporting;
@@ -72,7 +72,7 @@ fn run(selector: &Selector, reporter: Arc<dyn Reporter>) -> eyre::Result<()> {
         }
 
         let file = reader.read(entry.path())?;
-        for (name, task) in file.tasks() {
+        for (name, task) in file.targets() {
             let task_path = task_path(entry.path(), name);
 
             if !selector.matches(&task_path, &task.tags) {
@@ -96,23 +96,6 @@ fn run(selector: &Selector, reporter: Arc<dyn Reporter>) -> eyre::Result<()> {
     reporter.finish_top_level();
 
     Ok(())
-}
-
-#[derive(Debug, Default, starlark::any::ProvidesStaticType)]
-struct TaskSet(BTreeMap<String, Task>);
-
-impl TaskSet {
-    fn tasks(&self) -> impl Iterator<Item = (&String, &Task)> {
-        self.0.iter()
-    }
-}
-
-#[derive(Debug)]
-struct Task {
-    cmd: String,
-    prereqs: Vec<String>,
-    tags: HashSet<String>,
-    outs: HashMap<String, PathBuf>,
 }
 
 struct Builder {
@@ -151,12 +134,12 @@ impl Builder {
     #[context_attr::eyre(format!("Building {target}"))]
     fn build(&mut self, target: &str) -> eyre::Result<()> {
         let definition = self.root.join(target::path_to_definition(target)?);
-        let file = self.reader.read(&definition)?;
+        let targets = self.reader.read(&definition)?;
 
         let name = target::name(target)?;
 
-        let task = file
-            .0
+        let task = targets
+            .targets
             .get(name)
             .ok_or_eyre(format!("Unknown task: {target:?}"))?;
 
@@ -189,7 +172,7 @@ impl Builder {
         Ok(())
     }
 
-    fn execute(&mut self, task_path: &str, task: &Task, dir: &Path) -> eyre::Result<Output> {
+    fn execute(&mut self, task_path: &str, task: &Target, dir: &Path) -> eyre::Result<Output> {
         for prereq in &task.prereqs {
             self.build(&prereq)?;
         }
@@ -210,7 +193,7 @@ impl Builder {
 }
 
 struct Reader {
-    cache: DashMap<PathBuf, Arc<TaskSet>>,
+    cache: DashMap<PathBuf, Arc<TargetSet>>,
 }
 
 impl Reader {
@@ -220,18 +203,18 @@ impl Reader {
         }
     }
 
-    fn read(&self, path: impl AsRef<Path>) -> eyre::Result<Arc<TaskSet>> {
+    fn read(&self, path: impl AsRef<Path>) -> eyre::Result<Arc<TargetSet>> {
         let v = match self.cache.entry(path.as_ref().to_path_buf()) {
             dashmap::Entry::Occupied(o) => return Ok(Arc::clone(o.get())),
             dashmap::Entry::Vacant(v) => v,
         };
 
-        let tasks: TaskSet = self.load(path.as_ref())?;
+        let tasks: TargetSet = self.load(path.as_ref())?;
         let f = v.insert(Arc::new(tasks));
         Ok(Arc::clone(&f))
     }
 
-    fn load(&self, path: impl AsRef<Path>) -> eyre::Result<TaskSet> {
+    fn load(&self, path: impl AsRef<Path>) -> eyre::Result<TargetSet> {
         let path = path.as_ref();
         let contents = std::fs::read_to_string(path)?;
 
@@ -241,7 +224,7 @@ impl Reader {
         let globals = GlobalsBuilder::standard().with(task_definer).build();
         let module = Module::new();
 
-        let result = RefCell::new(TaskSet::default());
+        let result = RefCell::new(TargetSet::default());
         {
             let mut eval = Evaluator::new(&module);
             eval.extra = Some(&result);
@@ -270,22 +253,63 @@ fn task_definer(builder: &mut GlobalsBuilder) {
         let mut set = eval
             .extra
             .unwrap()
-            .downcast_ref::<RefCell<TaskSet>>()
+            .downcast_ref::<RefCell<TargetSet>>()
             .unwrap()
             .borrow_mut();
 
-        set.0.insert(
+        set.targets.insert(
             name.to_string(),
-            Task {
-                cmd,
-                prereqs: prereqs.into_iter().flatten().collect(),
-                tags: tags.into_iter().flatten().collect(),
-                outs: outs
-                    .into_iter()
-                    .flatten()
-                    .map(|(k, v)| (k, PathBuf::from(v)))
-                    .collect(),
-            },
+            Target::Task(Task {
+                common: Common {
+                    cmd,
+                    prereqs: prereqs.into_iter().flatten().collect(),
+                    tags: tags.into_iter().flatten().collect(),
+                    outs: outs
+                        .into_iter()
+                        .flatten()
+                        .map(|(k, v)| (k, PathBuf::from(v)))
+                        .collect(),
+                },
+            }),
+        );
+
+        Ok(NoneType)
+    }
+
+    fn build(
+        name: String,
+        cmd: String,
+        srcs: UnpackList<String>,
+        outs: BTreeMap<String, String>,
+        runs_on: Option<String>,
+
+        #[starlark(require = named)] prereqs: Option<UnpackList<String>>,
+        #[starlark(require = named)] tags: Option<UnpackList<String>>,
+
+        eval: &mut Evaluator,
+    ) -> starlark::Result<NoneType> {
+        let mut set = eval
+            .extra
+            .unwrap()
+            .downcast_ref::<RefCell<TargetSet>>()
+            .unwrap()
+            .borrow_mut();
+
+        set.targets.insert(
+            name.to_string(),
+            Target::Build(Build {
+                common: Common {
+                    cmd,
+                    prereqs: prereqs.into_iter().flatten().collect(),
+                    tags: tags.into_iter().flatten().collect(),
+                    outs: outs
+                        .into_iter()
+                        .map(|(k, v)| (k, PathBuf::from(v)))
+                        .collect(),
+                },
+                srcs: srcs.into_iter().collect(),
+                runs_on,
+            }),
         );
 
         Ok(NoneType)
