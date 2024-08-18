@@ -7,6 +7,8 @@ use std::{
 mod strings;
 pub use strings::*;
 
+use crate::os::Os;
+
 #[derive(Debug, Default, starlark::any::ProvidesStaticType)]
 pub struct TargetSet {
     pub targets: BTreeMap<String, Target>,
@@ -28,7 +30,7 @@ pub struct Build {
     #[allow(unused)]
     pub srcs: HashSet<String>,
     #[allow(unused)]
-    pub runs_on: Option<String>,
+    pub runs_on: Option<Os>,
 
     pub common: Common,
 }
@@ -45,6 +47,14 @@ pub struct Common {
 pub enum Target {
     Task(Task),
     Build(Build),
+}
+impl Target {
+    pub(crate) fn as_build(&self) -> Option<&Build> {
+        match self {
+            Target::Build(b) => Some(b),
+            Target::Task(_) => None,
+        }
+    }
 }
 
 impl Deref for Target {

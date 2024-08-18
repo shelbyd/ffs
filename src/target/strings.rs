@@ -109,7 +109,11 @@ pub fn task_path(file_or_dir: impl AsRef<Path>, name: &str) -> String {
 
 fn std_to_ffs(file_or_dir: impl AsRef<Path>) -> String {
     let file_or_dir = file_or_dir.as_ref();
-    assert!(file_or_dir.is_relative());
+    assert!(
+        file_or_dir.is_relative(),
+        "Expected {} to be relative",
+        file_or_dir.display()
+    );
 
     let without_ffs = if file_or_dir.file_name().is_some_and(|f| f == "FFS") {
         file_or_dir.parent().unwrap()

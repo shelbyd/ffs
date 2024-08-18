@@ -5,12 +5,12 @@ use std::{
     path::{Path, PathBuf},
     process::Output,
     sync::Arc,
-    time::Instant,
 };
 
 use clap::{Parser, Subcommand};
 use command::ParseError;
 use dashmap::DashMap;
+use executor::{Execution, Executor};
 use eyre::OptionExt;
 use reporting::{build_reporter, Reporter};
 use starlark::{
@@ -22,6 +22,8 @@ use starlark::{
 use target::{task_path, Build, Common, Selector, Target, TargetSet, Task};
 
 mod command;
+mod executor;
+mod os;
 mod reporting;
 mod target;
 
@@ -42,10 +44,9 @@ enum Command {
 fn main() -> eyre::Result<()> {
     let options = Options::parse();
 
-    let reporter = build_reporter(&options.reporting);
-
     match &options.command {
         Command::Run { selector } => {
+            let reporter = build_reporter(&options.reporting);
             run(&selector, reporter)?;
         }
     }
@@ -54,11 +55,13 @@ fn main() -> eyre::Result<()> {
 }
 
 fn run(selector: &Selector, reporter: Arc<dyn Reporter>) -> eyre::Result<()> {
-    // TODO(shelbyd): Search for root.
     let reader = Arc::new(Reader::new());
+    let executor = Arc::new(Executor::new(Arc::clone(&reporter)));
 
+    // TODO(shelbyd): Search for root.
     let root = std::env::current_dir()?;
-    let mut builder = Builder::new(Arc::clone(&reader), Arc::clone(&reporter), &root);
+
+    let mut builder = Builder::new(Arc::clone(&reader), Arc::clone(&executor), &root);
 
     for entry in ignore::Walk::new(".") {
         let entry = entry?;
@@ -100,17 +103,17 @@ fn run(selector: &Selector, reporter: Arc<dyn Reporter>) -> eyre::Result<()> {
 
 struct Builder {
     reader: Arc<Reader>,
-    reporter: Arc<dyn Reporter>,
+    executor: Arc<Executor>,
 
     root: PathBuf,
     target_outs: DashMap<String, PathBuf>,
 }
 
 impl Builder {
-    fn new(reader: Arc<Reader>, reporter: Arc<dyn Reporter>, root: impl AsRef<Path>) -> Self {
+    fn new(reader: Arc<Reader>, executor: Arc<Executor>, root: impl AsRef<Path>) -> Self {
         Self {
             reader,
-            reporter,
+            executor,
 
             root: root.as_ref().to_path_buf(),
             target_outs: Default::default(),
@@ -172,23 +175,19 @@ impl Builder {
         Ok(())
     }
 
-    fn execute(&mut self, task_path: &str, task: &Target, dir: &Path) -> eyre::Result<Output> {
+    fn execute(&mut self, path: &str, task: &Target, dir: &Path) -> eyre::Result<Output> {
         for prereq in &task.prereqs {
             self.build(&prereq)?;
         }
-        let command = self.parse_command(task_path, &task.cmd)?;
+        let command = self.parse_command(path, &task.cmd)?;
 
-        self.reporter.begin_execute(task_path);
-        let start = Instant::now();
-        let output = std::process::Command::new("sh")
-            .current_dir(dir)
-            .arg("-e")
-            .arg("-c")
-            .arg(command)
-            .output()?;
-        self.reporter.finish_execute(task_path, start.elapsed());
-
-        Ok(output)
+        let execution = Execution {
+            path,
+            command: &command,
+            dir,
+            runs_on: task.as_build().and_then(|b| b.runs_on.as_ref()),
+        };
+        Ok(self.executor.execute(execution)?)
     }
 }
 
@@ -287,7 +286,7 @@ fn task_definer(builder: &mut GlobalsBuilder) {
         #[starlark(require = named)] tags: Option<UnpackList<String>>,
 
         eval: &mut Evaluator,
-    ) -> starlark::Result<NoneType> {
+    ) -> anyhow::Result<NoneType> {
         let mut set = eval
             .extra
             .unwrap()
@@ -308,7 +307,10 @@ fn task_definer(builder: &mut GlobalsBuilder) {
                         .collect(),
                 },
                 srcs: srcs.into_iter().collect(),
-                runs_on,
+                runs_on: runs_on
+                    .map(|s| s.parse())
+                    .transpose()
+                    .map_err(|e: eyre::Report| anyhow::anyhow!(e))?,
             }),
         );
 
