@@ -1,4 +1,4 @@
-use std::{collections::HashSet, path::Path, str::FromStr};
+use std::{collections::HashSet, fmt::Display, path::Path, str::FromStr};
 
 pub fn path_to_definition(target: &str) -> eyre::Result<String> {
     let target = target
@@ -24,6 +24,7 @@ pub struct Selector {
     target: String,
     allow_children: bool,
     required_tags: HashSet<String>,
+    original: String,
 }
 
 impl Selector {
@@ -69,6 +70,7 @@ impl FromStr for Selector {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let mut result = Selector::default();
+        result.original = s.to_string();
 
         let s = if let Some((s, tags)) = s.split_once("@") {
             result.required_tags = tags.split(",").map(ToString::to_string).collect();
@@ -93,6 +95,12 @@ impl FromStr for Selector {
 
         result.target = s.to_string();
         Ok(result)
+    }
+}
+
+impl Display for Selector {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.original)
     }
 }
 

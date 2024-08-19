@@ -63,6 +63,7 @@ fn run(selector: &Selector, reporter: Arc<dyn Reporter>) -> eyre::Result<()> {
 
     let mut builder = Builder::new(Arc::clone(&reader), Arc::clone(&executor), &root);
 
+    let mut count = 0;
     for entry in ignore::Walk::new(".") {
         let entry = entry?;
 
@@ -93,9 +94,11 @@ fn run(selector: &Selector, reporter: Arc<dyn Reporter>) -> eyre::Result<()> {
                 std::io::stderr().lock().write_all(&output.stderr)?;
                 eyre::bail!("Task failed: {task_path}");
             }
+            count += 1;
         }
     }
 
+    eyre::ensure!(count > 0, "No targets found matching {selector}");
     reporter.finish_top_level();
 
     Ok(())
