@@ -9,7 +9,7 @@ pub use strings::*;
 
 use crate::os::Os;
 
-#[derive(Debug, Default, starlark::any::ProvidesStaticType)]
+#[derive(Debug, Default)]
 pub struct TargetSet {
     pub targets: BTreeMap<String, Target>,
 }
