@@ -4,8 +4,12 @@ use std::{
     path::PathBuf,
 };
 
-mod strings;
-pub use strings::*;
+mod output;
+mod relative;
+mod selector;
+mod target;
+
+pub use selector::*;
 
 use crate::os::Os;
 

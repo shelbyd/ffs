@@ -35,4 +35,4 @@ Every task and build can be referenced as a target.
 * Target - A specific task or build. A task `foo` in /path/to/FFS would have the target string `//path/to/foo`.
 * Selector - A matcher for multiple targets. `//path/to/...@foo` would match all targets that start with `//path/to/` and are tagged with `foo`.
 * Output - A file produced by a target. `//path/to/foo:output` would reference the file produced by `//path/to/foo` named `output`. A "target" string can be used as an output and will refer to the output with the special name `default`.
-* Relative Targets - In the context of another target, you can refer to relative targets with `%/path/to`. So when defining `//some/target`, `%/another/target` would resolve to `//some/another/target`.
+* Relative Targets/Outputs - In the context of another target, you can refer to relative targets with `%/path/to`. So when defining `//some/target`, `%/another/target` would resolve to `//some/another/target`.
