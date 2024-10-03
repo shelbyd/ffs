@@ -1,104 +1,130 @@
-use std::path::PathBuf;
+use std::{borrow::Borrow, path::PathBuf, str::FromStr};
 
 use dashmap::DashMap;
+use eyre::OptionExt;
 
-pub fn parse_command(
-    c: &str,
-    target_locations: &DashMap<String, PathBuf>,
-) -> Result<String, ParseError> {
-    Ok(c.split(" ")
-        .map(|target| {
-            if !target.starts_with("//") {
-                return Ok(target.to_string());
-            }
+use crate::target::{Output, TargetPath};
 
-            let Some(t) = target_locations.get(target) else {
-                return Err(ParseError::UnknownTarget(target.to_string()));
-            };
-
-            Ok(t.to_str().expect("path is not utf-8").to_string())
-        })
-        .collect::<Result<Vec<_>, _>>()?
-        .join(" "))
+pub struct Command {
+    words: Vec<Word>,
 }
 
-#[derive(thiserror::Error, Debug, PartialEq, Eq)]
-pub enum ParseError {
-    #[error("Unknown target {0}")]
-    UnknownTarget(String),
+impl Command {
+    pub fn targets(&self) -> impl Iterator<Item = impl Borrow<TargetPath> + '_> {
+        self.words
+            .iter()
+            .filter_map(|s| match s {
+                Word::Output(o) => Some(o),
+                _ => None,
+            })
+            .map(|o| o.target())
+    }
+
+    pub fn as_sh(&self, outputs: &DashMap<Output, PathBuf>) -> eyre::Result<String> {
+        Ok(self
+            .words
+            .iter()
+            .map(|w| {
+                let output = match w {
+                    Word::Lit(s) => return Ok(s.to_string()),
+                    Word::Output(o) => o,
+                };
+
+                let path = outputs
+                    .get(&output)
+                    .ok_or_eyre(format!("Missing output {output}"))?;
+
+                Ok(path
+                    .to_str()
+                    .ok_or_eyre(format!("Path not utf8 {}", path.display()))?
+                    .to_string())
+            })
+            .collect::<eyre::Result<Vec<_>>>()?
+            .join(""))
+    }
+}
+
+impl FromStr for Command {
+    type Err = eyre::Report;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut words = Vec::new();
+
+        let pat = &[' ', '\n'];
+
+        for s in s.split_inclusive(pat) {
+            let trimmed = s.trim_end_matches(pat);
+            match trimmed.parse() {
+                Ok(o) => {
+                    words.push(Word::Output(o));
+                    words.push(Word::Lit(s[trimmed.len()..].to_string()));
+                }
+                Err(_) => words.push(Word::Lit(s.to_string())),
+            }
+        }
+
+        Ok(Command { words })
+    }
+}
+
+enum Word {
+    Lit(String),
+    Output(Output),
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn system_command() {
-        let command = parse_command("echo 'foo'", &Default::default()).unwrap();
-        assert_eq!(command, "echo 'foo'");
+    fn target_strings(c: &Command) -> Vec<String> {
+        c.targets().map(|t| t.borrow().to_string()).collect()
+    }
+
+    fn map<'s>(i: impl IntoIterator<Item = (&'s str, &'s str)>) -> DashMap<Output, PathBuf> {
+        i.into_iter()
+            .map(|(out, path)| (out.parse().unwrap(), PathBuf::from(path)))
+            .collect()
     }
 
     #[test]
-    fn command_includes_tool() {
-        let command = parse_command(
-            "//some_tool foo",
-            &[("//some_tool", "some/tool/location")]
-                .into_iter()
-                .map(|(a, b)| (a.to_string(), b.into()))
-                .collect(),
-        )
-        .unwrap();
-        assert_eq!(command, "some/tool/location foo");
+    fn simple_command() {
+        let c = "echo 'foo'".parse::<Command>().unwrap();
+
+        assert_eq!(target_strings(&c), &[] as &[&str]);
+        assert_eq!(c.as_sh(&map([])).unwrap(), "echo 'foo'");
     }
 
     #[test]
-    fn just_command_no_args() {
-        let command = parse_command(
-            "//some_tool",
-            &[("//some_tool", "some/tool/location")]
-                .into_iter()
-                .map(|(a, b)| (a.to_string(), b.into()))
-                .collect(),
-        )
-        .unwrap();
+    fn output_as_arg() {
+        let c = "cat //path/to/target:output".parse::<Command>().unwrap();
 
-        assert_eq!(command, "some/tool/location");
-    }
-
-    #[test]
-    fn arg_uses_reference() {
-        let command = parse_command(
-            "system_tool //another/target",
-            &[("//another/target", "target/location")]
-                .into_iter()
-                .map(|(a, b)| (a.to_string(), b.into()))
-                .collect(),
-        )
-        .unwrap();
-
-        assert_eq!(command, "system_tool target/location");
-    }
-
-    #[test]
-    fn missing_target() {
-        let result = parse_command("system_tool //another/target", &Default::default());
+        assert_eq!(target_strings(&c), &["//path/to/target"]);
         assert_eq!(
-            result,
-            Err(ParseError::UnknownTarget("//another/target".to_string()))
+            c.as_sh(&map([("//path/to/target:output", "path/to/file")]))
+                .unwrap(),
+            "cat path/to/file",
         );
     }
 
     #[test]
-    fn does_not_replace_non_target() {
-        let result = parse_command(
-            "not_a_target arg",
-            &[("not_a_target", "should_not_be_here")]
-                .into_iter()
-                .map(|(a, b)| (a.to_string(), b.into()))
-                .collect(),
-        )
-        .unwrap();
+    fn output_as_command() {
+        let c = "//path/to/target:cmd arg1 arg2".parse::<Command>().unwrap();
 
-        assert_eq!(result, "not_a_target arg");
+        assert_eq!(target_strings(&c), &["//path/to/target"]);
+        assert_eq!(
+            c.as_sh(&map([("//path/to/target:cmd", "path/to/file")]))
+                .unwrap(),
+            "path/to/file arg1 arg2",
+        );
+    }
+
+    #[test]
+    fn multiple_lines() {
+        let c = "echo foo\n//some/target bar".parse::<Command>().unwrap();
+
+        assert_eq!(
+            c.as_sh(&map([("//some/target", "some/target")])).unwrap(),
+            "echo foo\nsome/target bar",
+        );
     }
 }

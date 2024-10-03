@@ -1,5 +1,7 @@
 use std::{fmt::Display, path::Path, str::FromStr};
 
+use super::Output;
+
 pub fn ident(s: &str) -> eyre::Result<&str> {
     let invalid_char = s
         .chars()
@@ -10,6 +12,7 @@ pub fn ident(s: &str) -> eyre::Result<&str> {
     Ok(s)
 }
 
+#[derive(Clone, PartialEq, Eq, Hash)]
 pub struct TargetPath {
     dir: Option<String>,
     name: String,
@@ -48,6 +51,13 @@ impl TargetPath {
             },
             name: name.to_string(),
         })
+    }
+
+    pub fn output(&self, name: &str) -> Output {
+        Output {
+            target: self.clone(),
+            name: name.to_string(),
+        }
     }
 }
 

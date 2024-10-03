@@ -1,11 +1,11 @@
 use std::{
+    borrow::Borrow,
     io::Write,
     path::{Path, PathBuf},
     sync::Arc,
 };
 
 use clap::{Parser, Subcommand};
-use command::ParseError;
 use dashmap::DashMap;
 use executor::{Execution, Executor};
 use eyre::OptionExt;
@@ -102,7 +102,7 @@ struct Builder {
     executor: Arc<Executor>,
 
     root: PathBuf,
-    target_outs: DashMap<String, PathBuf>,
+    outputs: DashMap<Output, PathBuf>,
 }
 
 impl Builder {
@@ -112,22 +112,7 @@ impl Builder {
             executor,
 
             root: root.as_ref().to_path_buf(),
-            target_outs: Default::default(),
-        }
-    }
-
-    #[context_attr::eyre(format!("Parsing command for {task_path}"))]
-    fn parse_command(&mut self, task_path: &TargetPath, c: &str) -> eyre::Result<String> {
-        loop {
-            // TODO(shelbyd): One pass parse.
-            match command::parse_command(c, &self.target_outs) {
-                Ok(c) => return eyre::Ok(c),
-
-                Err(ParseError::UnknownTarget(t)) => {
-                    let output = t.parse::<Output>()?;
-                    self.build(output.target())?;
-                }
-            }
+            outputs: Default::default(),
         }
     }
 
@@ -162,11 +147,7 @@ impl Builder {
                 file.display()
             );
 
-            if name == "default" {
-                self.target_outs.insert(task_path.to_string(), file);
-            } else {
-                self.target_outs.insert(format!("{task_path}:{name}"), file);
-            }
+            self.outputs.insert(task_path.output(name), file);
         }
 
         Ok(())
@@ -181,11 +162,16 @@ impl Builder {
         for prereq in &task.prereqs {
             self.build(&prereq.parse()?)?;
         }
-        let command = self.parse_command(path, &task.cmd)?;
+        let command = task.cmd.parse::<command::Command>()?;
+        for target in command.targets() {
+            self.build(target.borrow())?;
+        }
+
+        let sh_command = command.as_sh(&self.outputs)?;
 
         let execution = Execution {
             path,
-            command: &command,
+            command: &sh_command,
             dir,
             runs_on: task.as_build().and_then(|b| b.runs_on.as_ref()),
         };

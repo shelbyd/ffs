@@ -1,10 +1,11 @@
-use std::str::FromStr;
+use std::{fmt::Display, str::FromStr};
 
 use super::{ident, TargetPath};
 
+#[derive(PartialEq, Eq, Hash)]
 pub struct Output {
-    target: TargetPath,
-    name: String,
+    pub target: TargetPath,
+    pub name: String,
 }
 
 impl Output {
@@ -29,6 +30,12 @@ impl FromStr for Output {
             target: target.parse()?,
             name: name.to_string(),
         })
+    }
+}
+
+impl Display for Output {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:{}", self.target, self.name)
     }
 }
 
