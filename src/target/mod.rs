@@ -10,6 +10,7 @@ mod selector;
 mod target;
 
 pub use selector::*;
+pub use target::*;
 
 use crate::os::Os;
 
@@ -52,6 +53,7 @@ pub enum Target {
     Task(Task),
     Build(Build),
 }
+
 impl Target {
     pub(crate) fn as_build(&self) -> Option<&Build> {
         match self {

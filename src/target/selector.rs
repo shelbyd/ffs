@@ -1,24 +1,5 @@
 use std::{collections::HashSet, fmt::Display, path::Path, str::FromStr};
 
-pub fn path_to_definition(target: &str) -> eyre::Result<String> {
-    let target = target
-        .strip_prefix("//")
-        .ok_or_else(|| eyre::eyre!("Expected {target:?} to start with //"))?;
-
-    let Some((pre, _)) = target.rsplit_once("/") else {
-        return Ok(String::from("FFS"));
-    };
-
-    Ok(format!("{pre}/FFS"))
-}
-
-pub fn name(target: &str) -> eyre::Result<&str> {
-    Ok(target
-        .rsplit_once("/")
-        .ok_or_else(|| eyre::eyre!("Expected {target:?} to contain a /"))?
-        .1)
-}
-
 #[derive(Clone, Debug, Default)]
 pub struct Selector {
     target: String,
@@ -137,19 +118,6 @@ fn std_to_ffs(file_or_dir: impl AsRef<Path>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn root() {
-        assert_eq!(path_to_definition("//target").unwrap(), "FFS");
-    }
-
-    #[test]
-    fn subdir() {
-        assert_eq!(
-            path_to_definition("//path/to/target").unwrap(),
-            "path/to/FFS"
-        );
-    }
 
     fn selector_matches<'a>(
         sel: &str,

@@ -12,7 +12,7 @@ use executor::{Execution, Executor};
 use eyre::OptionExt;
 use reporting::{build_reporter, Reporter};
 use starlark::Reader;
-use target::{task_path, Selector, Target};
+use target::{task_path, Selector, Target, TargetPath};
 
 mod command;
 mod executor;
@@ -125,23 +125,23 @@ impl Builder {
                 Ok(c) => return eyre::Ok(c),
                 Err(ParseError::UnknownTarget(t)) => {
                     let task_path = t.split_once(":").map(|(t, _file)| t).unwrap_or(&t);
-                    self.build(task_path)?;
+                    self.build(&task_path.parse()?)?;
                 }
             }
         }
     }
 
     #[context_attr::eyre(format!("Building {target}"))]
-    fn build(&mut self, target: &str) -> eyre::Result<()> {
-        let definition = self.root.join(target::path_to_definition(target)?);
+    fn build(&mut self, target: &TargetPath) -> eyre::Result<()> {
+        let definition = self.root.join(target.definition());
         let targets = self.reader.read(&definition)?;
 
-        let name = target::name(target)?;
+        let name = target.name();
 
         let task = targets
             .targets
             .get(name)
-            .ok_or_eyre(format!("Unknown task: {target:?}"))?;
+            .ok_or_eyre(format!("Unknown task: {target}"))?;
 
         let dir = definition.parent().unwrap();
         let relative_dir = dir.strip_prefix(&self.root).unwrap();
@@ -174,7 +174,7 @@ impl Builder {
 
     fn execute(&mut self, path: &str, task: &Target, dir: &Path) -> eyre::Result<Output> {
         for prereq in &task.prereqs {
-            self.build(&prereq)?;
+            self.build(&prereq.parse()?)?;
         }
         let command = self.parse_command(path, &task.cmd)?;
 
