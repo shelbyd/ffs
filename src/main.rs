@@ -11,7 +11,7 @@ use executor::{Execution, Executor};
 use eyre::OptionExt;
 use reporting::{build_reporter, Reporter};
 use starlark::Reader;
-use target::{Output, Selector, Target, TargetPath};
+use target::{Output, Selector, TargetDef, TargetPath};
 
 mod command;
 mod executor;
@@ -156,7 +156,7 @@ impl Builder {
     fn execute(
         &mut self,
         path: &TargetPath,
-        task: &Target,
+        task: &TargetDef,
         dir: &Path,
     ) -> eyre::Result<std::process::Output> {
         for prereq in &task.prereqs {

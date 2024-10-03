@@ -17,11 +17,11 @@ use crate::{command::Command, os::Os};
 
 #[derive(Debug, Default)]
 pub struct TargetSet {
-    pub targets: BTreeMap<String, Target>,
+    pub targets: BTreeMap<String, TargetDef>,
 }
 
 impl TargetSet {
-    pub fn targets(&self) -> impl Iterator<Item = (&String, &Target)> {
+    pub fn targets(&self) -> impl Iterator<Item = (&String, &TargetDef)> {
         self.targets.iter()
     }
 }
@@ -50,27 +50,27 @@ pub struct Common {
 }
 
 #[derive(Debug)]
-pub enum Target {
+pub enum TargetDef {
     Task(Task),
     Build(Build),
 }
 
-impl Target {
+impl TargetDef {
     pub(crate) fn as_build(&self) -> Option<&Build> {
         match self {
-            Target::Build(b) => Some(b),
-            Target::Task(_) => None,
+            TargetDef::Build(b) => Some(b),
+            TargetDef::Task(_) => None,
         }
     }
 }
 
-impl Deref for Target {
+impl Deref for TargetDef {
     type Target = Common;
 
     fn deref(&self) -> &Self::Target {
         match self {
-            Target::Task(t) => &t.common,
-            Target::Build(b) => &b.common,
+            TargetDef::Task(t) => &t.common,
+            TargetDef::Build(b) => &b.common,
         }
     }
 }

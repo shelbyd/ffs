@@ -15,7 +15,7 @@ use starlark::{
     values::{list::UnpackList, none::NoneType},
 };
 
-use crate::target::{Build, Common, Target, TargetSet, Task};
+use crate::target::{Build, Common, TargetDef, TargetSet, Task};
 
 pub struct Reader {
     root: PathBuf,
@@ -120,7 +120,7 @@ fn task_definer(builder: &mut GlobalsBuilder) {
 
         set.targets.insert(
             name.to_string(),
-            Target::Task(Task {
+            TargetDef::Task(Task {
                 common: common_from(cmd, prereqs, tags, outs)?,
             }),
         );
@@ -145,7 +145,7 @@ fn task_definer(builder: &mut GlobalsBuilder) {
 
         set.targets.insert(
             name.to_string(),
-            Target::Build(Build {
+            TargetDef::Build(Build {
                 common: common_from(cmd, prereqs, tags, Some(outs))?,
                 srcs: srcs.into_iter().collect(),
                 runs_on: runs_on
