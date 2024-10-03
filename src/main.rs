@@ -1,7 +1,6 @@
 use std::{
     io::Write,
     path::{Path, PathBuf},
-    process::Output,
     sync::Arc,
 };
 
@@ -12,7 +11,7 @@ use executor::{Execution, Executor};
 use eyre::OptionExt;
 use reporting::{build_reporter, Reporter};
 use starlark::Reader;
-use target::{Selector, Target, TargetPath};
+use target::{Output, Selector, Target, TargetPath};
 
 mod command;
 mod executor;
@@ -123,9 +122,10 @@ impl Builder {
             // TODO(shelbyd): One pass parse.
             match command::parse_command(c, &self.target_outs) {
                 Ok(c) => return eyre::Ok(c),
+
                 Err(ParseError::UnknownTarget(t)) => {
-                    let task_path = t.split_once(":").map(|(t, _file)| t).unwrap_or(&t);
-                    self.build(&task_path.parse()?)?;
+                    let output = t.parse::<Output>()?;
+                    self.build(output.target())?;
                 }
             }
         }
@@ -172,7 +172,12 @@ impl Builder {
         Ok(())
     }
 
-    fn execute(&mut self, path: &TargetPath, task: &Target, dir: &Path) -> eyre::Result<Output> {
+    fn execute(
+        &mut self,
+        path: &TargetPath,
+        task: &Target,
+        dir: &Path,
+    ) -> eyre::Result<std::process::Output> {
         for prereq in &task.prereqs {
             self.build(&prereq.parse()?)?;
         }

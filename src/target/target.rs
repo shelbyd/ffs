@@ -1,5 +1,15 @@
 use std::{fmt::Display, path::Path, str::FromStr};
 
+pub fn ident(s: &str) -> eyre::Result<&str> {
+    let invalid_char = s
+        .chars()
+        .find(|c| !(c.is_alphanumeric() || matches!(c, '_' | '-')));
+    if let Some(c) = invalid_char {
+        eyre::bail!("Invalid ident char {c:?}");
+    }
+    Ok(s)
+}
+
 pub struct TargetPath {
     dir: Option<String>,
     name: String,
@@ -51,13 +61,13 @@ impl FromStr for TargetPath {
         };
         eyre::ensure!(!pre.contains("//"));
 
-        let valid_char = |c: char| c.is_alphanumeric() || matches!(c, '/' | '_' | '-');
-        let invalid_char = pre.chars().find(|c| !valid_char(*c));
-        if let Some(c) = invalid_char {
-            eyre::bail!("Invalid character: {c:?}");
-        }
+        let path = pre
+            .split("/")
+            .map(ident)
+            .collect::<Result<Vec<_>, _>>()?
+            .join("/");
 
-        let (dir, name) = match pre.rsplit_once("/") {
+        let (dir, name) = match path.rsplit_once("/") {
             Some((dir, name)) => (Some(dir), name),
             None => (None, pre),
         };

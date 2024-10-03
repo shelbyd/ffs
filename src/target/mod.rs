@@ -9,6 +9,7 @@ mod relative;
 mod selector;
 mod target;
 
+pub use output::*;
 pub use selector::*;
 pub use target::*;
 
