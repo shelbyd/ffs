@@ -121,16 +121,7 @@ fn task_definer(builder: &mut GlobalsBuilder) {
         set.targets.insert(
             name.to_string(),
             Target::Task(Task {
-                common: Common {
-                    cmd,
-                    prereqs: prereqs.into_iter().flatten().collect(),
-                    tags: tags.into_iter().flatten().collect(),
-                    outs: outs
-                        .into_iter()
-                        .flatten()
-                        .map(|(k, v)| (k, PathBuf::from(v)))
-                        .collect(),
-                },
+                common: common_from(cmd, prereqs, tags, outs)?,
             }),
         );
 
@@ -148,22 +139,14 @@ fn task_definer(builder: &mut GlobalsBuilder) {
         #[starlark(require = named)] tags: Option<UnpackList<String>>,
 
         eval: &mut Evaluator,
-    ) -> anyhow::Result<NoneType> {
+    ) -> starlark::Result<NoneType> {
         let context = eval.extra.unwrap().downcast_ref::<Context>().unwrap();
         let mut set = context.task_out.borrow_mut();
 
         set.targets.insert(
             name.to_string(),
             Target::Build(Build {
-                common: Common {
-                    cmd,
-                    prereqs: prereqs.into_iter().flatten().collect(),
-                    tags: tags.into_iter().flatten().collect(),
-                    outs: outs
-                        .into_iter()
-                        .map(|(k, v)| (k, PathBuf::from(v)))
-                        .collect(),
-                },
+                common: common_from(cmd, prereqs, tags, Some(outs))?,
                 srcs: srcs.into_iter().collect(),
                 runs_on: runs_on
                     .map(|s| s.parse())
@@ -184,4 +167,27 @@ fn task_definer(builder: &mut GlobalsBuilder) {
         let context = eval.extra.unwrap().downcast_ref::<Context>().unwrap();
         Ok(context.path.to_string())
     }
+}
+
+fn common_from(
+    cmd: String,
+    prereqs: Option<UnpackList<String>>,
+    tags: Option<UnpackList<String>>,
+    outs: Option<BTreeMap<String, String>>,
+) -> starlark::Result<Common> {
+    Ok(Common {
+        cmd: cmd.parse().map_err(|e: eyre::Report| anyhow::anyhow!(e))?,
+        prereqs: prereqs
+            .into_iter()
+            .flatten()
+            .map(|p| p.parse())
+            .collect::<eyre::Result<_>>()
+            .map_err(|e: eyre::Report| anyhow::anyhow!(e))?,
+        tags: tags.into_iter().flatten().collect(),
+        outs: outs
+            .into_iter()
+            .flatten()
+            .map(|(k, v)| (k, PathBuf::from(v)))
+            .collect(),
+    })
 }

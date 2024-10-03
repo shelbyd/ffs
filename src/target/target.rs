@@ -12,7 +12,7 @@ pub fn ident(s: &str) -> eyre::Result<&str> {
     Ok(s)
 }
 
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TargetPath {
     dir: Option<String>,
     name: String,

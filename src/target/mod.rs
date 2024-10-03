@@ -13,7 +13,7 @@ pub use output::*;
 pub use selector::*;
 pub use target::*;
 
-use crate::os::Os;
+use crate::{command::Command, os::Os};
 
 #[derive(Debug, Default)]
 pub struct TargetSet {
@@ -43,8 +43,8 @@ pub struct Build {
 
 #[derive(Debug)]
 pub struct Common {
-    pub cmd: String,
-    pub prereqs: HashSet<String>,
+    pub cmd: Command,
+    pub prereqs: HashSet<TargetPath>,
     pub tags: HashSet<String>,
     pub outs: HashMap<String, PathBuf>,
 }

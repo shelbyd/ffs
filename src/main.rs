@@ -160,14 +160,13 @@ impl Builder {
         dir: &Path,
     ) -> eyre::Result<std::process::Output> {
         for prereq in &task.prereqs {
-            self.build(&prereq.parse()?)?;
+            self.build(&prereq)?;
         }
-        let command = task.cmd.parse::<command::Command>()?;
-        for target in command.targets() {
+        for target in task.cmd.targets() {
             self.build(target.borrow())?;
         }
 
-        let sh_command = command.as_sh(&self.outputs)?;
+        let sh_command = task.cmd.as_sh(&self.outputs)?;
 
         let execution = Execution {
             path,

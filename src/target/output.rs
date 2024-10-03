@@ -2,7 +2,7 @@ use std::{fmt::Display, str::FromStr};
 
 use super::{ident, TargetPath};
 
-#[derive(PartialEq, Eq, Hash)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct Output {
     pub target: TargetPath,
     pub name: String,

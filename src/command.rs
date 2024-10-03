@@ -5,6 +5,7 @@ use eyre::OptionExt;
 
 use crate::target::{Output, TargetPath};
 
+#[derive(Debug)]
 pub struct Command {
     words: Vec<Word>,
 }
@@ -67,6 +68,7 @@ impl FromStr for Command {
     }
 }
 
+#[derive(Debug)]
 enum Word {
     Lit(String),
     Output(Output),
