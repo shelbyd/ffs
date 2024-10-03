@@ -268,9 +268,9 @@ checksum = "d3fd119d74b830634cea2a0f58bbd0d54540518a14397557951e79340abc28c0"
 
 [[package]]
 name = "context_attr"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aff444522d9f3837d868baa380c3495d84c809a003562078fc372d2cf5d54026"
+checksum = "cf77dfc35ad721f8ee7953573e789406278be7b83a98ad37e8b34942cb85d964"
 dependencies = [
  "eyre",
  "proc-macro2",

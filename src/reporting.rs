@@ -1,5 +1,7 @@
 use std::{io::Write, sync::Arc, time::Duration};
 
+use crate::target::TargetPath;
+
 #[derive(Debug, Clone, clap::Args)]
 pub struct Options {
     #[arg(long, short)]
@@ -16,8 +18,8 @@ pub fn build_reporter(options: &Options) -> Arc<dyn Reporter> {
 
 #[allow(unused)]
 pub trait Reporter {
-    fn begin_execute(&self, task: &str) {}
-    fn finish_execute(&self, task: &str, took: Duration) {}
+    fn begin_execute(&self, task: &TargetPath) {}
+    fn finish_execute(&self, task: &TargetPath, took: Duration) {}
     fn finish_top_level(&self) {}
 }
 
@@ -28,11 +30,11 @@ impl Reporter for Quiet {}
 struct Stderr(std::io::Stderr);
 
 impl Reporter for Stderr {
-    fn begin_execute(&self, task: &str) {
+    fn begin_execute(&self, task: &TargetPath) {
         let _ = writeln!(&self.0, "Running {task}");
     }
 
-    fn finish_execute(&self, task: &str, took: Duration) {
+    fn finish_execute(&self, task: &TargetPath, took: Duration) {
         let _ = writeln!(
             &self.0,
             "Finish  {task} in {}.{}s",

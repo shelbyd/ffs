@@ -1,4 +1,4 @@
-use std::{fmt::Display, str::FromStr};
+use std::{fmt::Display, path::Path, str::FromStr};
 
 pub struct TargetPath {
     dir: Option<String>,
@@ -16,6 +16,29 @@ impl TargetPath {
             None => "FFS".to_string(),
         }
     }
+
+    #[context_attr::eyre("Constructing path from {path:?} + {name}")]
+    pub fn from_path_name(path: &Path, name: &str) -> eyre::Result<TargetPath> {
+        let mut path = path.strip_prefix("./").unwrap_or(path);
+        if path.ends_with("FFS") {
+            path = path.parent().unwrap();
+        }
+
+        let Some(path) = path.to_str() else {
+            eyre::bail!("Path not utf-8");
+        };
+
+        let path = path.strip_suffix("/").unwrap_or(path);
+
+        Ok(TargetPath {
+            dir: if path.is_empty() {
+                None
+            } else {
+                Some(path.to_string())
+            },
+            name: name.to_string(),
+        })
+    }
 }
 
 impl FromStr for TargetPath {
@@ -28,7 +51,8 @@ impl FromStr for TargetPath {
         };
         eyre::ensure!(!pre.contains("//"));
 
-        let invalid_char = pre.chars().find(|c| !(c.is_alphanumeric() || *c == '/'));
+        let valid_char = |c: char| c.is_alphanumeric() || matches!(c, '/' | '_' | '-');
+        let invalid_char = pre.chars().find(|c| !valid_char(*c));
         if let Some(c) = invalid_char {
             eyre::bail!("Invalid character: {c:?}");
         }
@@ -62,7 +86,7 @@ mod tests {
 
     #[test]
     fn valid_parsing() {
-        let cases = ["//target", "//path/to/target"];
+        let cases = ["//target", "//path/to/target", "//allowed/characters_-"];
 
         for t in cases {
             if let Err(e) = t.parse::<TargetPath>() {
@@ -109,6 +133,25 @@ mod tests {
                 .unwrap()
                 .definition(),
             "path/to/FFS"
+        );
+    }
+
+    #[test]
+    fn from_path_name() {
+        fn target_path(p: &str, name: &str) -> String {
+            TargetPath::from_path_name(Path::new(p), name)
+                .unwrap()
+                .to_string()
+        }
+
+        assert_eq!(target_path("./FFS", "task"), "//task");
+        assert_eq!(target_path("path/to", "task"), "//path/to/task");
+        assert_eq!(target_path("path/to/", "task"), "//path/to/task");
+        assert_eq!(target_path("path/to/FFS", "task"), "//path/to/task");
+        assert_eq!(target_path("./path/to/FFS", "task"), "//path/to/task");
+        assert_eq!(
+            target_path("./path/to/fakeFFS", "task"),
+            "//path/to/fakeFFS/task"
         );
     }
 }

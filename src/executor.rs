@@ -1,6 +1,6 @@
 use std::{path::Path, process::Output, sync::Arc, time::Instant};
 
-use crate::{os::Os, reporting::Reporter};
+use crate::{os::Os, reporting::Reporter, target::TargetPath};
 
 pub struct Executor {
     reporter: Arc<dyn Reporter>,
@@ -35,7 +35,7 @@ impl Executor {
 }
 
 pub struct Execution<'l> {
-    pub path: &'l str,
+    pub path: &'l TargetPath,
     pub command: &'l str,
     pub dir: &'l Path,
     pub runs_on: Option<&'l Os>,

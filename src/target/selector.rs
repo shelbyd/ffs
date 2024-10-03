@@ -1,5 +1,7 @@
 use std::{collections::HashSet, fmt::Display, path::Path, str::FromStr};
 
+use super::TargetPath;
+
 #[derive(Clone, Debug, Default)]
 pub struct Selector {
     target: String,
@@ -9,17 +11,19 @@ pub struct Selector {
 }
 
 impl Selector {
-    pub fn matches<T>(&self, task_id: &str, tags: &HashSet<T>) -> bool
+    pub fn matches<T>(&self, path: &TargetPath, tags: &HashSet<T>) -> bool
     where
         T: std::borrow::Borrow<str> + Eq + std::hash::Hash,
     {
+        let path = path.to_string();
+
         for req in &self.required_tags {
             if !tags.contains(req.as_str()) {
                 return false;
             }
         }
 
-        let Some(child) = task_id.strip_prefix(&self.target) else {
+        let Some(child) = path.strip_prefix(&self.target) else {
             return false;
         };
 
@@ -85,17 +89,6 @@ impl Display for Selector {
     }
 }
 
-pub fn task_path(file_or_dir: impl AsRef<Path>, name: &str) -> String {
-    let mut result = std_to_ffs(file_or_dir);
-
-    if !result.ends_with("/") {
-        result += "/";
-    }
-    result += name;
-
-    result
-}
-
 fn std_to_ffs(file_or_dir: impl AsRef<Path>) -> String {
     let file_or_dir = file_or_dir.as_ref();
     assert!(
@@ -104,7 +97,7 @@ fn std_to_ffs(file_or_dir: impl AsRef<Path>) -> String {
         file_or_dir.display()
     );
 
-    let without_ffs = if file_or_dir.file_name().is_some_and(|f| f == "FFS") {
+    let without_ffs = if file_or_dir.ends_with("FFS") {
         file_or_dir.parent().unwrap()
     } else {
         file_or_dir
@@ -125,7 +118,8 @@ mod tests {
         tags: impl IntoIterator<Item = &'a str>,
     ) -> bool {
         let sel = sel.parse::<Selector>().unwrap();
-        sel.matches(target, &tags.into_iter().collect())
+        let target_path = target.parse().unwrap();
+        sel.matches(&target_path, &tags.into_iter().collect())
     }
 
     #[test]
@@ -236,14 +230,5 @@ mod tests {
     #[test]
     fn root_file() {
         assert!(selector_matches_file("//root_target", "./FFS"));
-    }
-
-    #[test]
-    fn task_path_() {
-        assert_eq!(task_path("./FFS", "task"), "//task");
-        assert_eq!(task_path("path/to", "task"), "//path/to/task");
-        assert_eq!(task_path("path/to/", "task"), "//path/to/task");
-        assert_eq!(task_path("path/to/FFS", "task"), "//path/to/task");
-        assert_eq!(task_path("./path/to/FFS", "task"), "//path/to/task");
     }
 }

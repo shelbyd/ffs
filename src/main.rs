@@ -12,7 +12,7 @@ use executor::{Execution, Executor};
 use eyre::OptionExt;
 use reporting::{build_reporter, Reporter};
 use starlark::Reader;
-use target::{task_path, Selector, Target, TargetPath};
+use target::{Selector, Target, TargetPath};
 
 mod command;
 mod executor;
@@ -71,7 +71,7 @@ fn run(selector: &Selector, reporter: Arc<dyn Reporter>) -> eyre::Result<()> {
 
         let file = reader.read(entry.path())?;
         for (name, task) in file.targets() {
-            let task_path = task_path(entry.path(), name);
+            let task_path = TargetPath::from_path_name(entry.path(), name)?;
 
             if !selector.matches(&task_path, &task.tags) {
                 continue;
@@ -118,7 +118,7 @@ impl Builder {
     }
 
     #[context_attr::eyre(format!("Parsing command for {task_path}"))]
-    fn parse_command(&mut self, task_path: &str, c: &str) -> eyre::Result<String> {
+    fn parse_command(&mut self, task_path: &TargetPath, c: &str) -> eyre::Result<String> {
         loop {
             // TODO(shelbyd): One pass parse.
             match command::parse_command(c, &self.target_outs) {
@@ -146,7 +146,7 @@ impl Builder {
         let dir = definition.parent().unwrap();
         let relative_dir = dir.strip_prefix(&self.root).unwrap();
 
-        let task_path = task_path(&relative_dir, name);
+        let task_path = TargetPath::from_path_name(&relative_dir, name)?;
 
         let output = self.execute(&task_path, task, &dir)?;
 
@@ -172,7 +172,7 @@ impl Builder {
         Ok(())
     }
 
-    fn execute(&mut self, path: &str, task: &Target, dir: &Path) -> eyre::Result<Output> {
+    fn execute(&mut self, path: &TargetPath, task: &Target, dir: &Path) -> eyre::Result<Output> {
         for prereq in &task.prereqs {
             self.build(&prereq.parse()?)?;
         }
